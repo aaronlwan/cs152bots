@@ -2,6 +2,7 @@ from enum import Enum, auto
 import discord
 import re
 import ast
+from db import supabase
 
 class State(Enum):
     REVIEW_START = auto()
@@ -14,7 +15,12 @@ class State(Enum):
     ADVERSARIAL_REPORTING = auto()
     COORDINATED_HARASSMENT = auto()
 
-    
+final_actions_messages = {
+    "1": "Your report has been reviewed. The message has been deleted and the user has been warned.",
+    "2": "Your report has been reviewed. The message has been deleted and the user has been suspended.",
+    "3": "Your report has been reviewed. The message has been deleted and the user has been banned.",
+    "4": "Your report has been reviewed. Unfortunately, no action has been taken. We appreciate your vigilance and suggest you block the user if you feel unsafe. If you have any further concerns, please let us know."
+}
 
 class Review:
     START_KEYWORD = "review"
@@ -81,13 +87,13 @@ class Review:
 
         if self.state == State.ADVERSARIAL_REPORTING:
             if message.content == "1":
-                reporting_user_id = self.review_data["authorId"]
+                reporting_user_id = self.review_data["reporter_id"]
                 reporting_user = await self.client.fetch_user(reporting_user_id)
                 await reporting_user.send("You have been banned due to adversarial reporting.")
                 self.state = State.REVIEW_COMPLETE
                 return ["The reporting user has been notified of the ban."]
             elif message.content == "2":
-                reporting_user_id = self.review_data["authorId"]
+                reporting_user_id = self.review_data["reporter_id"]
                 reporting_user = await self.client.fetch_user(reporting_user_id)
                 await reporting_user.send("Your report has been reviewed. Unfortunately, no action has been taken. We appreciate your vigilance and suggest you block the user if you feel unsafe. If you have any further concerns, please let us know.")
                 self.state = State.REVIEW_COMPLETE
@@ -96,15 +102,27 @@ class Review:
                 return ["Invalid selection. Please select a valid option."]
 
         if self.state == State.SEVERITY:
-            if message.content in ["1", "2", "3"]:
-                reporting_user_id = self.review_data["authorId"]
+            decision = message.content
+            if decision in final_actions_messages:
+                # Send a dm to the reporting user to let them know the decision
+                reporting_user_id = self.review_data["reporter_id"]
                 reporting_user = await self.client.fetch_user(reporting_user_id)
-                if message.content == "1":
-                    await reporting_user.send("Your report has been reviewed. The message has been deleted and the user has been warned.")
-                elif message.content == "2":
-                    await reporting_user.send("Your report has been reviewed. The message has been deleted and the user has been suspended.")
-                elif message.content == "3":
-                    await reporting_user.send("Your report has been reviewed. The message has been deleted and the user has been banned.")
+                await reporting_user.send(final_actions_messages[decision])
+
+                # Send a dm to the user who posted the message to let them know the decision
+                reported_user_id = self.review_data["authorId"]
+                reported_user = await self.client.fetch_user(reported_user_id)
+                if decision == "1":
+                    await reported_user.send("Your message violates our platform policies. This is a warning.")
+                elif decision == "2":
+                    await reported_user.send("Your message violates our platform policies. You have been suspended.")
+                elif decision == "3":
+                    await reported_user.send("Your message violates our platform policies. You have been banned.")
+                print(reporting_user, reporting_user_id, decision)
+
+                # Update the decision in the database
+                data = supabase.table('reports').update({'decision': final_actions_messages[decision]}).eq('id', self.review_data["report_id"]).execute().data
+
                 self.state = State.REVIEW_COMPLETE
                 return ["Review complete."]
             else:
@@ -113,19 +131,26 @@ class Review:
         if self.state == State.FINAL_ACTIONS:
             print("TAKING FINAL ACTIONS")
             decision = message.content
-            if decision in ["1", "2", "3", "4"]:
+            if decision in final_actions_messages:
                 # Send a dm to the reporting user to let them know the decision
-                reporting_user_id = self.review_data["authorId"]
+                reporting_user_id = self.review_data["reporter_id"]
                 reporting_user = await self.client.fetch_user(reporting_user_id)
-                print(reporting_user, reporting_user_id, message.content)
-                if message.content == "1":
-                    await reporting_user.send("Your report has been reviewed. The message has been deleted and the user has been warned.")
-                elif message.content == "2":
-                    await reporting_user.send("Your report has been reviewed. The message has been deleted and the user has been suspended.")
-                elif message.content == "3":
-                    await reporting_user.send("Your report has been reviewed. The message has been deleted and the user has been banned.")
-                elif message.content == "4":
-                    await reporting_user.send("Your report has been reviewed. Unfortunately, no action has been taken. We appreciate your vigilance and suggest you block the user if you feel unsafe. If you have any further concerns, please let us know.")
+                await reporting_user.send(final_actions_messages[decision])
+
+                # Send a dm to the user who posted the message to let them know the decision
+                reported_user_id = self.review_data["authorId"]
+                reported_user = await self.client.fetch_user(reported_user_id)
+                if decision == "1":
+                    await reported_user.send("Your message violates our platform policies. This is a warning.")
+                elif decision == "2":
+                    await reported_user.send("Your message violates our platform policies. You have been suspended.")
+                elif decision == "3":
+                    await reported_user.send("Your message violates our platform policies. You have been banned.")
+                print(reporting_user, reporting_user_id, decision)
+
+                # Update the decision in the database
+                data = supabase.table('reports').update({'decision': final_actions_messages[decision]}).eq('id', self.review_data["report_id"]).execute().data
+
                 self.state = State.REVIEW_COMPLETE
                 return ["Review complete."]
             else:
